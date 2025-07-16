@@ -1,0 +1,140 @@
+# === 用户活跃度对比分析 ===
+def user_activity_comparison():
+    """
+    对比高活跃vs低活跃用户的行为差异
+    这是重要的细分分析
+    """
+    
+    print("=== 用户活跃度对比分析 ===")
+    
+    try:
+        # 加载时序数据
+        print("1. 加载数据...")
+        df_ts = pd.read_parquet('data_multi_users_timeseries.parquet')
+        
+        # 计算每个用户的评论数
+        user_review_counts = df_ts.groupby('user_id').size()
+        
+        # 定义活跃度
+        high_active_users = user_review_counts[user_review_counts >= 5].index  # 5条以上
+        low_active_users = user_review_counts[user_review_counts < 5].index    # 5条以下
+        
+        print(f"   高活跃用户: {len(high_active_users):,}")
+        print(f"   低活跃用户: {len(low_active_users):,}")
+        
+        # 分别分析两组用户
+        high_active_data = df_ts[df_ts['user_id'].isin(high_active_users)]
+        low_active_data = df_ts[df_ts['user_id'].isin(low_active_users)]
+        
+        print(f"   高活跃用户记录: {len(high_active_data):,}")
+        print(f"   低活跃用户记录: {len(low_active_data):,}")
+        
+        # 2. 对比分析
+        print("\n2. 对比分析...")
+        
+        def analyze_group(data, group_name):
+            """分析用户组的特征"""
+            results = {}
+            
+            # 基础统计
+            results['avg_sentiment'] = data['sentiment'].mean()
+            results['avg_rating'] = data['rating'].mean()
+            results['sentiment_std'] = data['sentiment'].std()
+            
+            # 变化分析
+            changes = data['sentiment_change'].dropna()
+            if len(changes) > 0:
+                results['sentiment_change_mean'] = changes.mean()
+                results['sentiment_change_std'] = changes.std()
+                results['positive_change_pct'] = (changes > 0).mean() * 100
+            
+            rating_changes = data['rating_change'].dropna()
+            if len(rating_changes) > 0:
+                results['rating_change_mean'] = rating_changes.mean()
+                results['positive_rating_change_pct'] = (rating_changes > 0).mean() * 100
+            
+            return results
+        
+        # 分析两组
+        high_active_results = analyze_group(high_active_data, "高活跃")
+        low_active_results = analyze_group(low_active_data, "低活跃")
+        
+        print("   对比结果:")
+        metrics = ['avg_sentiment', 'avg_rating', 'sentiment_std', 
+                  'sentiment_change_mean', 'positive_change_pct']
+        
+        for metric in metrics:
+            if metric in high_active_results and metric in low_active_results:
+                high_val = high_active_results[metric]
+                low_val = low_active_results[metric]
+                diff = high_val - low_val
+                print(f"     {metric}:")
+                print(f"       高活跃: {high_val:.3f}")
+                print(f"       低活跃: {low_val:.3f}")
+                print(f"       差异: {diff:.3f}")
+        
+        # 3. 假设H2验证：情绪波动与活跃度关系
+        print("\n3. H2验证：情绪波动与用户活跃度...")
+        
+        # 计算用户级别的波动性
+        user_volatility_high = []
+        user_volatility_low = []
+        
+        # 采样分析（避免内存问题）
+        sample_high = list(high_active_users)[:200] if len(high_active_users) > 200 else list(high_active_users)
+        sample_low = list(low_active_users)[:500] if len(low_active_users) > 500 else list(low_active_users)
+        
+        for user_id in sample_high:
+            user_data = df_ts[df_ts['user_id'] == user_id]
+            if len(user_data) > 2:
+                volatility = user_data['sentiment'].std()
+                if not pd.isna(volatility):
+                    user_volatility_high.append(volatility)
+        
+        for user_id in sample_low:
+            user_data = df_ts[df_ts['user_id'] == user_id]
+            if len(user_data) > 1:
+                volatility = user_data['sentiment'].std()
+                if not pd.isna(volatility):
+                    user_volatility_low.append(volatility)
+        
+        if user_volatility_high and user_volatility_low:
+            avg_vol_high = sum(user_volatility_high) / len(user_volatility_high)
+            avg_vol_low = sum(user_volatility_low) / len(user_volatility_low)
+            
+            print(f"     高活跃用户平均波动性: {avg_vol_high:.3f}")
+            print(f"     低活跃用户平均波动性: {avg_vol_low:.3f}")
+            print(f"     波动性差异: {avg_vol_high - avg_vol_low:.3f}")
+            
+            if avg_vol_high < avg_vol_low:
+                print("     📊 发现：高活跃用户情绪更稳定！")
+            else:
+                print("     📊 发现：高活跃用户情绪波动更大")
+        
+        # 保存对比结果
+        comparison_results = {
+            'high_active_stats': high_active_results,
+            'low_active_stats': low_active_results,
+            'volatility_analysis': {
+                'high_active_volatility': avg_vol_high if 'avg_vol_high' in locals() else None,
+                'low_active_volatility': avg_vol_low if 'avg_vol_low' in locals() else None
+            },
+            'sample_sizes': {
+                'high_active_users': len(high_active_users),
+                'low_active_users': len(low_active_users)
+            }
+        }
+        
+        import json
+        with open('user_activity_comparison.json', 'w') as f:
+            json.dump(comparison_results, f, indent=2, default=str)
+        
+        print(f"\n✅ 用户活跃度对比分析完成！")
+        return comparison_results
+        
+    except Exception as e:
+        print(f"❌ 分析失败: {e}")
+        return None
+
+# 执行对比分析
+comparison_results = user_activity_comparison()
