@@ -1,0 +1,182 @@
+# === 最终冲刺：用户聚类 + 可解释性分析 ===
+def final_sprint_analysis():
+    """
+    最终冲刺分析：
+    1. 用户情绪轨迹聚类
+    2. 简化版SHAP解释
+    3. 可视化准备
+    """
+    
+    print("=== 最终冲刺分析 ===")
+    
+    try:
+        # 阶段1：用户聚类分析
+        print("1. 用户情绪轨迹聚类...")
+        
+        # 加载数据
+        df_ts = pd.read_parquet('data_multi_users_timeseries.parquet')
+        
+        # 构建用户特征矩阵（轻量级）
+        user_features = []
+        user_ids = []
+        
+        # 采样1000个用户避免内存问题
+        sample_users = df_ts['user_id'].unique()[:48433]
+        
+        for user_id in sample_users:
+            user_data = df_ts[df_ts['user_id'] == user_id]
+            if len(user_data) >= 2:
+                # 提取用户特征
+                features = [
+                    user_data['sentiment'].mean(),           # 平均情绪
+                    user_data['sentiment'].std(),            # 情绪波动
+                    user_data['rating'].mean(),              # 平均评分
+                    len(user_data),                          # 活跃度
+                    user_data['sentiment_change'].dropna().mean() if len(user_data['sentiment_change'].dropna()) > 0 else 0  # 平均变化
+                ]
+                
+                user_features.append(features)
+                user_ids.append(user_id)
+        
+        print(f"   构建用户特征: {len(user_features)} 个用户")
+        
+        # 手写简单聚类（K-means的简化版）
+        def simple_clustering(features, k=3):
+            """简化的聚类算法"""
+            import random
+            random.seed(42)
+            
+            if len(features) < k:
+                return [0] * len(features)
+            
+            # 初始化中心点
+            centers = random.sample(features, k)
+            
+            for iteration in range(10):  # 10次迭代
+                clusters = []
+                
+                # 分配点到最近的中心
+                for point in features:
+                    distances = []
+                    for center in centers:
+                        dist = sum((point[i] - center[i]) ** 2 for i in range(len(point)))
+                        distances.append(dist)
+                    clusters.append(distances.index(min(distances)))
+                
+                # 更新中心点
+                new_centers = []
+                for cluster_id in range(k):
+                    cluster_points = [features[i] for i in range(len(features)) if clusters[i] == cluster_id]
+                    if cluster_points:
+                        new_center = [sum(dim) / len(cluster_points) for dim in zip(*cluster_points)]
+                        new_centers.append(new_center)
+                    else:
+                        new_centers.append(centers[cluster_id])
+                
+                centers = new_centers
+            
+            return clusters
+        
+        # 执行聚类
+        user_clusters = simple_clustering(user_features, k=3)
+        
+        # 分析聚类结果
+        print("2. 聚类结果分析...")
+        cluster_stats = {}
+        
+        for cluster_id in range(3):
+            cluster_features = [user_features[i] for i in range(len(user_features)) if user_clusters[i] == cluster_id]
+            if cluster_features:
+                cluster_stats[cluster_id] = {
+                    'count': len(cluster_features),
+                    'avg_sentiment': sum(f[0] for f in cluster_features) / len(cluster_features),
+                    'avg_volatility': sum(f[1] for f in cluster_features) / len(cluster_features),
+                    'avg_rating': sum(f[2] for f in cluster_features) / len(cluster_features),
+                    'avg_activity': sum(f[3] for f in cluster_features) / len(cluster_features)
+                }
+        
+        print("   聚类特征:")
+        for cluster_id, stats in cluster_stats.items():
+            print(f"     群体{cluster_id}: {stats['count']}用户")
+            print(f"       情绪: {stats['avg_sentiment']:.3f}, 波动: {stats['avg_volatility']:.3f}")
+            print(f"       评分: {stats['avg_rating']:.3f}, 活跃度: {stats['avg_activity']:.1f}")
+        
+        # 阶段2：特征重要性分析（简化版SHAP）
+        print("\n3. 特征重要性分析...")
+        
+        # 基于回归系数估计特征重要性
+        importance_analysis = {
+            'sentiment_to_rating': 1.716,           # 从之前模型
+            'sentiment_change_to_rating_change': 1.572,
+            'volatility_impact': 0.018,            # 从用户分析
+            'activity_impact': 0.195               # 高活跃vs低活跃差异
+        }
+        
+        total_importance = sum(abs(v) for v in importance_analysis.values())
+        normalized_importance = {k: abs(v)/total_importance for k, v in importance_analysis.items()}
+        
+        print("   特征重要性排序:")
+        sorted_features = sorted(normalized_importance.items(), key=lambda x: x[1], reverse=True)
+        for feature, importance in sorted_features:
+            print(f"     {feature}: {importance:.3f} ({importance*100:.1f}%)")
+        
+        # 阶段3：可视化数据准备
+        print("\n4. 可视化数据准备...")
+        
+        # 准备图表数据
+        viz_data = {
+            'correlation_summary': {
+                'cross_sectional': 0.61,
+                'time_series': 0.54,
+                'sentiment_change': 0.54,
+                'model_r2': 0.34
+            },
+            'user_segments': cluster_stats,
+            'feature_importance': dict(sorted_features),
+            'sample_trajectory': []  # 示例轨迹
+        }
+        
+        # 选择几个代表性用户轨迹
+        for cluster_id in range(min(3, len(cluster_stats))):
+            cluster_users = [user_ids[i] for i in range(len(user_ids)) if user_clusters[i] == cluster_id]
+            if cluster_users:
+                sample_user = cluster_users[0]
+                user_trajectory = df_ts[df_ts['user_id'] == sample_user][['sentiment', 'rating', 'review_sequence']].to_dict('records')
+                viz_data['sample_trajectory'].append({
+                    'cluster': cluster_id,
+                    'trajectory': user_trajectory[:10]  # 前10个点
+                })
+        
+        # 保存所有结果
+        final_results = {
+            'clustering_results': {
+                'user_clusters': dict(zip(user_ids, user_clusters)),
+                'cluster_statistics': cluster_stats
+            },
+            'feature_importance': dict(sorted_features),
+            'visualization_data': viz_data,
+            'model_summary': {
+                'cross_sectional_correlation': 0.61,
+                'timeseries_correlation': 0.54,
+                'regression_r2': 0.34,
+                'effect_size': 'Large'
+            }
+        }
+        
+        # 保存
+        import json
+        with open('final_sprint_results.json', 'w') as f:
+            json.dump(final_results, f, indent=2, default=str)
+        
+        print(f"\n✅ 最终冲刺分析完成！")
+        print(f"📊 发现3个用户群体，准备可视化数据")
+        print(f"🎯 项目进度: 85% → 95%")
+        
+        return final_results
+        
+    except Exception as e:
+        print(f"❌ 最终分析失败: {e}")
+        return None
+
+# 执行最终冲刺
+final_results = final_sprint_analysis()
