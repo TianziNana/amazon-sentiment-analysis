@@ -1,0 +1,134 @@
+# === 统计建模验证假设 ===
+def statistical_modeling():
+    """
+    用统计模型验证发现的关系
+    """
+    
+    print("=== 统计建模验证 ===")
+    
+    try:
+        # 加载时序数据
+        df_ts = pd.read_parquet('data_multi_users_timeseries.parquet')
+        
+        # 准备建模数据
+        print("1. 准备建模数据...")
+        modeling_data = df_ts[['sentiment_change', 'rating_change', 'sentiment', 'rating', 
+                              'review_sequence', 'sentiment_volatility']].dropna()
+        
+        print(f"   建模样本量: {len(modeling_data):,}")
+        
+        # 采样以避免内存问题
+        if len(modeling_data) > 10000:
+            modeling_sample = modeling_data.sample(n=10000, random_state=42)
+        else:
+            modeling_sample = modeling_data
+        
+        print(f"   最终样本量: {len(modeling_sample):,}")
+        
+        # 2. 模型1：情绪变化预测评分变化
+        print("\n2. 模型1：情绪变化 → 评分变化")
+        
+        # 转为列表进行手写回归
+        x_values = modeling_sample['sentiment_change'].tolist()  # 自变量
+        y_values = modeling_sample['rating_change'].tolist()     # 因变量
+        
+        # 手写简单线性回归
+        def simple_regression(x, y):
+            """手写线性回归"""
+            n = len(x)
+            if n != len(y) or n < 2:
+                return None
+            
+            # 计算均值
+            x_mean = sum(x) / n
+            y_mean = sum(y) / n
+            
+            # 计算斜率和截距
+            numerator = sum((x[i] - x_mean) * (y[i] - y_mean) for i in range(n))
+            denominator = sum((x[i] - x_mean) ** 2 for i in range(n))
+            
+            if denominator == 0:
+                return None
+            
+            slope = numerator / denominator
+            intercept = y_mean - slope * x_mean
+            
+            # 计算R²
+            y_pred = [slope * x[i] + intercept for i in range(n)]
+            ss_res = sum((y[i] - y_pred[i]) ** 2 for i in range(n))
+            ss_tot = sum((y[i] - y_mean) ** 2 for i in range(n))
+            
+            r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
+            
+            return {
+                'slope': slope,
+                'intercept': intercept,
+                'r_squared': r_squared,
+                'n_observations': n
+            }
+        
+        model1_results = simple_regression(x_values, y_values)
+        
+        if model1_results:
+            print(f"   回归系数: {model1_results['slope']:.4f}")
+            print(f"   截距: {model1_results['intercept']:.4f}")
+            print(f"   R²: {model1_results['r_squared']:.4f}")
+            print(f"   解释: 情绪变化1单位 → 评分变化{model1_results['slope']:.3f}单位")
+        
+        # 3. 模型2：情绪水平预测评分
+        print("\n3. 模型2：情绪水平 → 评分")
+        
+        x2_values = modeling_sample['sentiment'].tolist()
+        y2_values = modeling_sample['rating'].tolist()
+        
+        model2_results = simple_regression(x2_values, y2_values)
+        
+        if model2_results:
+            print(f"   回归系数: {model2_results['slope']:.4f}")
+            print(f"   R²: {model2_results['r_squared']:.4f}")
+            print(f"   解释: 情绪提升1单位 → 评分提升{model2_results['slope']:.3f}分")
+        
+        # 4. 效应大小解释
+        print("\n4. 效应大小评估...")
+        
+        def interpret_effect_size(r_squared):
+            if r_squared >= 0.25:
+                return "大效应"
+            elif r_squared >= 0.09:
+                return "中等效应"
+            elif r_squared >= 0.01:
+                return "小效应"
+            else:
+                return "微小效应"
+        
+        if model1_results:
+            effect1 = interpret_effect_size(model1_results['r_squared'])
+            print(f"   模型1效应大小: {effect1} (R²={model1_results['r_squared']:.3f})")
+        
+        if model2_results:
+            effect2 = interpret_effect_size(model2_results['r_squared'])
+            print(f"   模型2效应大小: {effect2} (R²={model2_results['r_squared']:.3f})")
+        
+        # 保存建模结果
+        modeling_results = {
+            'model1_sentiment_change_to_rating_change': model1_results,
+            'model2_sentiment_to_rating': model2_results,
+            'sample_size': len(modeling_sample),
+            'interpretation': {
+                'model1_effect': effect1 if 'effect1' in locals() else None,
+                'model2_effect': effect2 if 'effect2' in locals() else None
+            }
+        }
+        
+        with open('statistical_modeling_results.json', 'w') as f:
+            json.dump(modeling_results, f, indent=2)
+        
+        print(f"\n✅ 统计建模完成！")
+        return modeling_results
+        
+    except Exception as e:
+        print(f"❌ 建模失败: {e}")
+        return None
+
+# 执行统计建模
+modeling_results = statistical_modeling()
