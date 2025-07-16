@@ -1,0 +1,181 @@
+# === 时序分析：多评论用户情绪变化模式 ===
+import pandas as pd
+import json
+import math
+
+def time_series_analysis():
+    """
+    多评论用户时序分析
+    核心：分析情绪变化对评分和用户行为的影响
+    """
+    
+    print("=== 时序分析开始 ===")
+    
+    try:
+        # 1. 加载时序数据
+        print("1. 加载时序数据...")
+        df_ts = pd.read_parquet('data_multi_users_timeseries.parquet')
+        print(f"   时序数据: {len(df_ts):,} 条记录")
+        print(f"   用户数: {df_ts['user_id'].nunique():,}")
+        print(f"   列名: {list(df_ts.columns)}")
+        
+        # 2. 数据质量检查
+        print("\n2. 数据质量检查...")
+        # 检查关键列
+        key_cols = ['user_id', 'sentiment', 'rating', 'sentiment_change', 'rating_change']
+        missing_info = {}
+        for col in key_cols:
+            if col in df_ts.columns:
+                missing = df_ts[col].isnull().sum()
+                missing_info[col] = missing
+                print(f"   {col}: {missing:,} 缺失 ({missing/len(df_ts)*100:.1f}%)")
+        
+        # 3. 采样分析（避免内存问题）
+        print("\n3. 采样用户进行分析...")
+        sample_users = df_ts['user_id'].unique()[:1000]  # 分析1000个用户
+        df_sample = df_ts[df_ts['user_id'].isin(sample_users)].copy()
+        
+        print(f"   采样用户: {len(sample_users):,}")
+        print(f"   采样记录: {len(df_sample):,}")
+        
+        # 4. 时序特征分析
+        print("\n4. 时序特征分析...")
+        
+        # 4.1 情绪变化分析
+        sentiment_changes = df_sample['sentiment_change'].dropna()
+        positive_changes = (sentiment_changes > 0).sum()
+        negative_changes = (sentiment_changes < 0).sum()
+        no_changes = (sentiment_changes == 0).sum()
+        
+        print(f"   情绪变化模式:")
+        print(f"     上升: {positive_changes:,} ({positive_changes/len(sentiment_changes)*100:.1f}%)")
+        print(f"     下降: {negative_changes:,} ({negative_changes/len(sentiment_changes)*100:.1f}%)")
+        print(f"     不变: {no_changes:,} ({no_changes/len(sentiment_changes)*100:.1f}%)")
+        
+        # 4.2 评分变化分析
+        rating_changes = df_sample['rating_change'].dropna()
+        rating_up = (rating_changes > 0).sum()
+        rating_down = (rating_changes < 0).sum()
+        rating_same = (rating_changes == 0).sum()
+        
+        print(f"   评分变化模式:")
+        print(f"     上升: {rating_up:,} ({rating_up/len(rating_changes)*100:.1f}%)")
+        print(f"     下降: {rating_down:,} ({rating_down/len(rating_changes)*100:.1f}%)")
+        print(f"     不变: {rating_same:,} ({rating_same/len(rating_changes)*100:.1f}%)")
+        
+        # 5. 假设验证
+        print("\n5. 假设验证...")
+        
+        # H1: 情绪上升 → 评分提升
+        print("   H1: 情绪上升 → 评分提升")
+        h1_data = df_sample[['sentiment_change', 'rating_change']].dropna()
+        
+        if len(h1_data) > 0:
+            # 手写相关性计算
+            sent_change_list = h1_data['sentiment_change'].tolist()
+            rating_change_list = h1_data['rating_change'].tolist()
+            
+            h1_correlation = manual_correlation(sent_change_list, rating_change_list)
+            print(f"     情绪变化-评分变化相关性: {h1_correlation:.4f}")
+            
+            # 方向性分析
+            both_up = ((h1_data['sentiment_change'] > 0) & (h1_data['rating_change'] > 0)).sum()
+            both_down = ((h1_data['sentiment_change'] < 0) & (h1_data['rating_change'] < 0)).sum()
+            same_direction = both_up + both_down
+            
+            print(f"     同向变化比例: {same_direction/len(h1_data)*100:.1f}%")
+            print(f"     其中上升: {both_up}, 下降: {both_down}")
+        
+        # 6. 用户类型分析
+        print("\n6. 用户行为模式分析...")
+        
+        # 计算每个用户的情绪波动性
+        user_volatility = []
+        user_avg_sentiment = []
+        user_review_counts = []
+        
+        for user_id in sample_users:
+            user_data = df_sample[df_sample['user_id'] == user_id]
+            if len(user_data) > 1:
+                sentiments = user_data['sentiment'].dropna().tolist()
+                if len(sentiments) > 1:
+                    # 计算标准差（波动性）
+                    avg_sent = sum(sentiments) / len(sentiments)
+                    variance = sum((s - avg_sent) ** 2 for s in sentiments) / len(sentiments)
+                    volatility = math.sqrt(variance)
+                    
+                    user_volatility.append(volatility)
+                    user_avg_sentiment.append(avg_sent)
+                    user_review_counts.append(len(user_data))
+        
+        print(f"   分析用户数: {len(user_volatility)}")
+        if user_volatility:
+            avg_volatility = sum(user_volatility) / len(user_volatility)
+            avg_sentiment = sum(user_avg_sentiment) / len(user_avg_sentiment)
+            avg_reviews = sum(user_review_counts) / len(user_review_counts)
+            
+            print(f"   平均情绪波动性: {avg_volatility:.3f}")
+            print(f"   平均情绪水平: {avg_sentiment:.3f}")
+            print(f"   平均评论数: {avg_reviews:.1f}")
+        
+        # 7. 用户留存分析（简化版）
+        print("\n7. 用户活跃度分析...")
+        
+        # 按评论时间跨度分类用户
+        user_spans = []
+        for user_id in sample_users:
+            user_data = df_sample[df_sample['user_id'] == user_id]
+            if len(user_data) > 1 and 'timestamp' in user_data.columns:
+                # 如果有时间戳，计算时间跨度
+                # 这里简化为评论数量分析
+                user_spans.append(len(user_data))
+        
+        if user_spans:
+            # 高活跃 vs 低活跃用户
+            high_active = [s for s in user_spans if s >= 5]  # 5条以上
+            low_active = [s for s in user_spans if s < 5]    # 5条以下
+            
+            print(f"   高活跃用户: {len(high_active)} ({len(high_active)/len(user_spans)*100:.1f}%)")
+            print(f"   低活跃用户: {len(low_active)} ({len(low_active)/len(user_spans)*100:.1f}%)")
+        
+        # 8. 结果汇总
+        results = {
+            'sample_stats': {
+                'users_analyzed': len(sample_users),
+                'records_analyzed': len(df_sample),
+                'sentiment_changes_analyzed': len(sentiment_changes)
+            },
+            'sentiment_change_patterns': {
+                'positive_changes_pct': positive_changes/len(sentiment_changes)*100 if len(sentiment_changes) > 0 else 0,
+                'negative_changes_pct': negative_changes/len(sentiment_changes)*100 if len(sentiment_changes) > 0 else 0
+            },
+            'hypothesis_results': {
+                'h1_correlation': h1_correlation if 'h1_correlation' in locals() else None,
+                'same_direction_pct': same_direction/len(h1_data)*100 if 'h1_data' in locals() and len(h1_data) > 0 else None
+            },
+            'user_behavior': {
+                'avg_volatility': avg_volatility if 'avg_volatility' in locals() else None,
+                'avg_sentiment': avg_sentiment if 'avg_sentiment' in locals() else None,
+                'high_active_pct': len(high_active)/len(user_spans)*100 if 'high_active' in locals() and user_spans else None
+            }
+        }
+        
+        # 保存结果
+        with open('timeseries_analysis_results.json', 'w') as f:
+            json.dump(results, f, indent=2)
+        
+        print(f"\n✅ 时序分析完成！")
+        print(f"📊 结果已保存到 timeseries_analysis_results.json")
+        print(f"🎯 项目进度: 50% → 75%")
+        
+        return results
+        
+    except Exception as e:
+        print(f"❌ 时序分析失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+# 执行时序分析
+print("🚀 开始项目核心部分：时序分析")
+timeseries_results = time_series_analysis()
